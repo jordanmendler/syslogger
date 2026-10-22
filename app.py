@@ -228,12 +228,13 @@ PAGE = r"""<!doctype html>
     .sub,.muted{color:#62717d}.bar,.event{background:white;border:1px solid #dce3e8;border-radius:9px;padding:15px 18px;margin:12px 0}
     .event.predicted-important{background:#eef9f1;border-left:6px solid #258454}.event.predicted-not-important{background:#fff1f1;border-left:6px solid #bd4b4b}
     .bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.bar button{background:#176b87;color:white;border:0;border-radius:6px;padding:10px 16px;font-weight:650;cursor:pointer}
-    .bar button:disabled{opacity:.55;cursor:wait}.event{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:18px;align-items:start}
+    .bar button:disabled{opacity:.55;cursor:wait}.event{display:grid;grid-template-columns:28px minmax(0,1fr) 190px;gap:14px;align-items:start}
+    .event-check{margin-top:4px;width:18px;height:18px;cursor:pointer}.bulk{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.bulk button{background:#176b87;color:white;border:0;border-radius:6px;padding:8px 12px;font-weight:650;cursor:pointer}.bulk button.no{background:#8d2828}
     pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;font:13px/1.5 ui-monospace,monospace}
     .ratings{display:flex;gap:6px;margin-top:8px}.rating{flex:1;min-width:0;padding:7px 5px;border:1px solid #258454;border-radius:6px;background:#e5f5eb;color:#17663e;cursor:pointer;text-align:center;font-size:12px;white-space:nowrap}
     .rating.no{border-color:#bd4b4b;background:#fceaea;color:#8d2828}.rating.selected{font-weight:700;box-shadow:0 0 0 2px currentColor}
     .tag{font-size:12px;color:#465762}
-    @media(max-width:650px){.event{grid-template-columns:1fr}}
+    @media(max-width:650px){.event{grid-template-columns:24px 1fr}.event>div:last-child{grid-column:2}}
   </style>
 </head>
 <body>
@@ -243,37 +244,48 @@ PAGE = r"""<!doctype html>
     <button id="train" onclick="trainModel()">Train PyTorch model from my ratings</button>
     <span id="training">{{ train_message }}</span><span class="muted" id="kafka"></span><span class="muted" id="counts"></span>
   </section>
+  <section class="bar"><button id="important-view" disabled onclick="switchView('important')">Important</button><button id="unrated-view" onclick="switchView('unrated')">Unrated</button><button id="not-important-view" onclick="switchView('not_important')">Not important</button></section>
+  <section class="bar bulk"><label><input id="select-all" type="checkbox" onchange="toggleAll(this.checked)"> Select all loaded events</label><button onclick="bulkRate(1)">Mark selected important</button><button class="no" onclick="bulkRate(0)">Mark selected not important</button><span class="muted" id="selection-count">0 selected</span></section>
     <div id="events"></div><div id="pagecontrols"></div>
 <script>
 const labels={0:'Not important',1:'Important'};
 let oldestId=null, hasMore=false, browsingOlder=false;
+let activeView='important';
+const selected=new Set();
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function eventMarkup(e){
   const actual=e.is_important===null?'Unrated':labels[e.is_important];
   const predicted=e.predicted===null?'Model not trained':`${labels[e.predicted]} (${Math.round(e.confidence*100)}%)`;
   const predictionClass=e.predicted===1?'predicted-important':e.predicted===0?'predicted-not-important':'';
-  return `<article class="event ${predictionClass}"><div><div class="tag">${esc(e.received_at)} · partition ${e.partition_id}, offset ${e.offset_id} · model: ${esc(predicted)}</div><pre>${esc(e.message)}</pre></div><div><div class="tag">Your choice: <b>${esc(actual)}</b></div><div class="ratings"><button class="rating ${e.is_important===1?'selected':''}" aria-label="Mark important" aria-pressed="${e.is_important===1}" onclick="rate(${e.id},1)">✓ Important</button><button class="rating no ${e.is_important===0?'selected':''}" aria-label="Mark not important" aria-pressed="${e.is_important===0}" onclick="rate(${e.id},0)">✕ Not important</button></div></div></article>`;
+  return `<article class="event ${predictionClass}"><input class="event-check" type="checkbox" aria-label="Select event ${e.id}" ${selected.has(e.id)?'checked':''} onchange="toggleOne(${e.id},this.checked)"><div><div class="tag">${esc(e.received_at)} · partition ${e.partition_id}, offset ${e.offset_id} · model: ${esc(predicted)}</div><pre>${esc(e.message)}</pre></div><div><div class="tag">Your choice: <b>${esc(actual)}</b></div><div class="ratings"><button class="rating ${e.is_important===1?'selected':''}" aria-label="Mark important" aria-pressed="${e.is_important===1}" onclick="rate(${e.id},1)">✓ Important</button><button class="rating no ${e.is_important===0?'selected':''}" aria-label="Mark not important" aria-pressed="${e.is_important===0}" onclick="rate(${e.id},0)">✕ Not important</button></div></div></article>`;
 }
+function updateSelectionUI(){const checks=[...document.querySelectorAll('.event-check')];const count=checks.filter(c=>c.checked).length;const all=document.getElementById('select-all');all.checked=checks.length>0&&count===checks.length;all.indeterminate=count>0&&count<checks.length;document.getElementById('selection-count').textContent=`${selected.size} selected`;}
+function toggleOne(id,checked){if(checked)selected.add(id);else selected.delete(id);updateSelectionUI();}
+function toggleAll(checked){document.querySelectorAll('.event-check').forEach(c=>{c.checked=checked;const id=Number(c.getAttribute('aria-label').match(/\d+$/)[0]);if(checked)selected.add(id);else selected.delete(id);});updateSelectionUI();}
 function showControls(){document.getElementById('pagecontrols').innerHTML=`${hasMore?'<button onclick="loadOlder()">Load older events</button>':''} ${browsingOlder?'<button onclick="refresh()">Back to newest</button>':''}`;}
+function switchView(view){if(view===activeView)return;activeView=view;selected.clear();oldestId=null;hasMore=false;browsingOlder=false;document.getElementById('important-view').disabled=view==='important';document.getElementById('unrated-view').disabled=view==='unrated';document.getElementById('not-important-view').disabled=view==='not_important';document.getElementById('events').innerHTML='';updateSelectionUI();refresh();}
 async function refresh(){
-  const response=await fetch('/api/events'); if(!response.ok)return;
+  const view=activeView; const response=await fetch(`/api/events?view=${view}`); if(!response.ok||view!==activeView)return;
   const data=await response.json(); document.getElementById('counts').textContent=`${data.total} imported events · ${data.rated} rated`;
   document.getElementById('training').textContent=data.training.message;
   document.getElementById('kafka').textContent=data.kafka.message;
   const root=document.getElementById('events');
-  if(!data.events.length){root.innerHTML='<section class="event muted">Waiting for Kafka messages… Check that the brokers are reachable and the topic has data.</section>';return;}
+  if(!data.events.length){const emptyText={important:'No important events found.',unrated:'No unrated events found.',not_important:'No events marked Not important.'}[activeView];root.innerHTML=`<section class="event muted">${emptyText}</section>`;oldestId=null;hasMore=false;browsingOlder=false;showControls();updateSelectionUI();return;}
   root.innerHTML=data.events.map(eventMarkup).join('');
+  updateSelectionUI();
   oldestId=data.events[data.events.length-1].id; hasMore=data.has_more; browsingOlder=false; showControls();
 }
 async function loadOlder(){
   if(!oldestId||!hasMore)return;
-  const response=await fetch(`/api/events?before_id=${oldestId}`); if(!response.ok)return;
+  const view=activeView; const response=await fetch(`/api/events?view=${view}&before_id=${oldestId}`); if(!response.ok||view!==activeView)return;
   const data=await response.json();
   document.getElementById('events').insertAdjacentHTML('beforeend',data.events.map(eventMarkup).join(''));
+  updateSelectionUI();
   if(data.events.length)oldestId=data.events[data.events.length-1].id;
   hasMore=data.has_more; browsingOlder=true; showControls();
 }
 async function rate(id,value){await fetch(`/api/events/${id}/importance`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_important:Boolean(value)})});refresh();}
+async function bulkRate(value){const ids=[...selected];if(!ids.length)return;const response=await fetch('/api/events/importance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,is_important:Boolean(value)})});if(response.ok){selected.clear();refresh();}}
 async function trainModel(){const b=document.getElementById('train');b.disabled=true;document.getElementById('training').textContent='Training…';await fetch('/api/train',{method:'POST'});b.disabled=false;refresh();}
 refresh();setInterval(()=>{if(!browsingOlder)refresh();},4000);
 </script>
@@ -296,32 +308,57 @@ def create_app(start_consumer: bool = True) -> Flask:
     def events():
         limit = min(max(request.args.get("limit", 200, type=int), 1), 500)
         before_id = request.args.get("before_id", type=int)
+        view = request.args.get("view", "main")
+        if view not in {"important", "unrated", "not_important"}:
+            return jsonify(error="view must be important, unrated, or not_important"), 400
+        model = load_model()
+        filter_sql = {
+            "important": "1=1" if model else "is_important=1",
+            "unrated": "is_important IS NULL",
+            "not_important": "is_important=0",
+        }[view]
         with connect_db() as connection:
             total = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
             rated = connection.execute("SELECT COUNT(*) FROM events WHERE is_important IS NOT NULL").fetchone()[0]
-            if before_id is None:
-                rows = connection.execute(
-                    "SELECT id, partition_id, offset_id, message, received_at, is_important FROM events ORDER BY id DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT id, partition_id, offset_id, message, received_at, is_important FROM events WHERE id < ? ORDER BY id DESC LIMIT ?",
-                    (before_id, limit),
-                ).fetchall()
-            has_more = bool(rows) and connection.execute("SELECT 1 FROM events WHERE id < ? LIMIT 1", (rows[-1]["id"],)).fetchone() is not None
-        model = load_model()
-        result = [dict(row) for row in rows]
-        if model and result:
-            with torch.no_grad():
-                probabilities = torch.softmax(model(vectorize([item["message"] for item in result], DIMENSIONS)), dim=1)
-            for item, probability in zip(result, probabilities):
-                item["predicted"] = int(probability.argmax().item())
-                item["confidence"] = float(probability.max().item())
-        else:
-            for item in result:
-                item["predicted"] = None
-                item["confidence"] = None
+            cursor_id = before_id
+            result: list[dict[str, Any]] = []
+            chunk_size = min(max(limit, 100), 500)
+            while len(result) <= limit:
+                if cursor_id is None:
+                    rows = connection.execute(
+                        f"SELECT id, partition_id, offset_id, message, received_at, is_important FROM events WHERE {filter_sql} ORDER BY id DESC LIMIT ?",
+                        (chunk_size,),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        f"SELECT id, partition_id, offset_id, message, received_at, is_important FROM events WHERE {filter_sql} AND id < ? ORDER BY id DESC LIMIT ?",
+                        (cursor_id, chunk_size),
+                    ).fetchall()
+                if not rows:
+                    break
+                cursor_id = rows[-1]["id"]
+                batch = [dict(row) for row in rows]
+                if model and batch:
+                    with torch.no_grad():
+                        probabilities = torch.softmax(
+                            model(vectorize([item["message"] for item in batch], DIMENSIONS)), dim=1
+                        )
+                    for item, probability in zip(batch, probabilities):
+                        item["predicted"] = int(probability.argmax().item())
+                        item["confidence"] = float(probability.max().item())
+                else:
+                    for item in batch:
+                        item["predicted"] = None
+                        item["confidence"] = None
+                for item in batch:
+                    if view != "important" or item["is_important"] == 1 or item["predicted"] == 1:
+                        result.append(item)
+                        if len(result) > limit:
+                            break
+                if len(result) > limit or len(rows) < chunk_size:
+                    break
+            has_more = len(result) > limit
+            result = result[:limit]
         with MODEL_LOCK:
             training = dict(TRAIN_STATE)
         return jsonify(events=result, total=total, rated=rated, has_more=has_more, training=training, kafka=dict(KAFKA_STATE))
@@ -337,6 +374,23 @@ def create_app(start_consumer: bool = True) -> Flask:
         if cursor.rowcount == 0:
             return jsonify(error="event not found"), 404
         return jsonify(ok=True)
+
+    @app.post("/api/events/importance")
+    def set_many_importance():
+        body = request.get_json(silent=True) or {}
+        ids = body.get("ids")
+        value = body.get("is_important")
+        if not isinstance(ids, list) or not ids or any(type(item) is not int or item <= 0 for item in ids):
+            return jsonify(error="ids must be a non-empty list of positive event IDs"), 400
+        if not isinstance(value, bool):
+            return jsonify(error="is_important must be true or false"), 400
+        with connect_db() as connection:
+            cursor = connection.executemany(
+                "UPDATE events SET is_important=? WHERE id=?",
+                [(int(value), event_id) for event_id in set(ids)],
+            )
+            updated = cursor.rowcount
+        return jsonify(ok=True, updated=updated)
 
     @app.post("/api/train")
     def start_training():
