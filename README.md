@@ -1,11 +1,10 @@
 # rsyslog importance review web app
 
 The web app consumes messages from Kafka and shows them in a browser. You can
-mark each event with **✓ Important** or **✕ Not important**. Selecting **Train
-PyTorch model from my ratings** trains a binary classifier on all rated events.
-Once trained, the app displays its predicted choice and confidence beside each
-new or existing event. Your choices remain editable and are used the next time
-you train. Training requires at least one event in each category.
+mark each event with **✓ Important** or **✕ Not important**. A local Qwen model
+scores events from 1 (routine) to 5 (urgent) and gives a short reason. Scores
+are cached in SQLite; the Important view shows events scored 4 or 5. Manual
+ratings remain available for review.
 
 By default it connects to topic `rsyslog` on
 `172.16.108.245:9092,172.16.108.246:9092,172.16.108.247:9092`.
@@ -17,9 +16,8 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-Open <http://127.0.0.1:5000>. The app stores received events and ratings in
-`rsyslog-events.sqlite3` and the trained model in `importance-model.pt` in the
-current directory. It listens on localhost by default. To listen on another
+Open <http://127.0.0.1:5000>. The app stores received events, Qwen scores, and
+ratings in `rsyslog-events.sqlite3` in the current directory. It listens on localhost by default. To listen on another
 interface, set `WEB_HOST=0.0.0.0` before starting it.
 
 ## Configuration
@@ -31,9 +29,15 @@ KAFKA_BROKERS=broker1:9092,broker2:9092 \
 KAFKA_TOPIC=rsyslog \
 KAFKA_GROUP_ID=rsyslog-review-web \
 RSYSLOG_DB=/path/to/events.sqlite3 \
-IMPORTANCE_MODEL=/path/to/importance-model.pt \
+QWEN_URL=http://127.0.0.1:11434/api/generate \
+QWEN_MODEL=qwen3.8 \
 python app.py
 ```
+
+Install and start Ollama locally, then pull the configured model with
+`ollama pull qwen3.8`. Ollama lists this model as a 27B model with an 18 GB
+download, so confirm your machine has enough memory and storage first. Qwen analysis starts automatically when events
+are viewed; event data is not sent to a remote service.
 
 The consumer imports from the earliest retained offset the first time it sees
 each Kafka partition, regardless of prior Kafka group offsets. It stores every
